@@ -1,0 +1,542 @@
+---
+title: "House Prices: Advanced Regression Techniques"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+author: Oscar Violante
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:\\Users\\oscar\\Documents")
+Sys.setenv(JAVA_HOME='C:/Program Files/Java/jre-9.0.4')
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(moments)
+library(glmnet)
+library(caret)
+library(FSelector)
+library(corrplot)
+library(gridExtra)
+library(stringr)
+
+```
+
+
+# Introduction
+The  dataset we are going to use is the House Prices Dataset. It includes 79 explanatory variables of residential homes in Ames, Iowa. For more details on the dataset and the competition see <https://www.kaggle.com/c/house-prices-advanced-regression-techniques>.
+
+
+```{r Load Data}
+raw_training_data <- read.csv("C:/Users/oscar/Documents/train.csv", header=TRUE, sep=",")
+
+raw_test_data = read.csv("C:/Users/oscar/Documents/test.csv", header=TRUE, sep=",")
+```
+
+Combine test and training set for cleaning
+```{r #Combine test and training set for cleaning}
+data_combined <- rbind(within(raw_training_data, rm('Id','SalePrice')), within(raw_test_data, rm('Id')))
+dim(data_combined)
+str(data_combined)
+```
+
+## Hunting NAs
+Our dataset is filled with many missing values, therefore, before we can build any predictive model we'll clean our data by filling in all NA's with appropriate values.
+
+Counting columns with null values
+```{r NAs discovery}
+na.cols <- which(colSums(is.na(data_combined)) > 0)
+sort(colSums(sapply(data_combined[na.cols], is.na)), decreasing = TRUE)
+
+paste('There are', length(na.cols), 'columns with missing values')
+
+## Remove the Utilities feature from the dataset (It only has one value)
+data_combined <- data_combined[,-which(names(data_combined) == "Utilities")]
+
+```
+
+NA imputation:
+```{r Train NA Imputation}
+# Alley : NA means "no alley access"
+data_combined$Alley = factor(data_combined$Alley, levels=c(levels(data_combined$Alley), "None"))
+data_combined$Alley[is.na(data_combined$Alley)] = "None"
+
+# Bsmt : NA for basement features is "no basement"
+data_combined$BsmtQual = factor(data_combined$BsmtQual, levels=c(levels(data_combined$BsmtQual), "No"))
+data_combined$BsmtQual[is.na(data_combined$BsmtQual)] = "No"
+
+data_combined$BsmtCond = factor(data_combined$BsmtCond, levels=c(levels(data_combined$BsmtCond), "No"))
+data_combined$BsmtCond[is.na(data_combined$BsmtCond)] = "No"
+
+data_combined$BsmtExposure[is.na(data_combined$BsmtExposure)] = "No"
+
+data_combined$BsmtFinType1 = factor(data_combined$BsmtFinType1, levels=c(levels(data_combined$BsmtFinType1), "No"))
+data_combined$BsmtFinType1[is.na(data_combined$BsmtFinType1)] = "No"
+
+data_combined$BsmtFinType2 = factor(data_combined$BsmtFinType2, levels=c(levels(data_combined$BsmtFinType2), "No"))
+data_combined$BsmtFinType2[is.na(data_combined$BsmtFinType2)] = "No"
+
+data_combined$BsmtFinSF1[is.na(data_combined$BsmtFinSF1)] <- 0
+data_combined$BsmtFinSF2[is.na(data_combined$BsmtFinSF2)] <- 0
+data_combined$BsmtUnfSF[is.na(data_combined$BsmtUnfSF)] <- 0
+data_combined$TotalBsmtSF[is.na(data_combined$TotalBsmtSF)] <- 0
+data_combined$BsmtFullBath[is.na(data_combined$BsmtFullBath)] <- 0
+data_combined$BsmtHalfBath[is.na(data_combined$BsmtHalfBath)] <- 0
+
+
+# Fence : NA means "no fence"
+data_combined$Fence = factor(data_combined$Fence, levels=c(levels(data_combined$Fence), "No"))
+data_combined$Fence[is.na(data_combined$Fence)] = "No"
+
+# FireplaceQu : NA means "no fireplace"
+data_combined$FireplaceQu = factor(data_combined$FireplaceQu, levels=c(levels(data_combined$FireplaceQu), "No"))
+data_combined$FireplaceQu[is.na(data_combined$FireplaceQu)] = "No"
+
+
+# Garage : NA for garage features is "no garage"
+data_combined$GarageType = factor(data_combined$GarageType, levels=c(levels(data_combined$GarageType), "No"))
+data_combined$GarageType[is.na(data_combined$GarageType)] = "No"
+
+data_combined$GarageFinish = factor(data_combined$GarageFinish, levels=c(levels(data_combined$GarageFinish), "No"))
+data_combined$GarageFinish[is.na(data_combined$GarageFinish)] = "No"
+
+data_combined$GarageQual = factor(data_combined$GarageQual, levels=c(levels(data_combined$GarageQual), "No"))
+data_combined$GarageQual[is.na(data_combined$GarageQual)] = "No"
+
+data_combined$GarageCond = factor(data_combined$GarageCond, levels=c(levels(data_combined$GarageCond), "No"))
+data_combined$GarageCond[is.na(data_combined$GarageCond)] = "No"
+
+data_combined$GarageCars[is.na(data_combined$GarageCars)] <- 0
+data_combined$GarageArea[is.na(data_combined$GarageArea)] <- 0
+
+
+# LotFrontage : NA most likely means no lot frontage
+data_combined$LotFrontage[is.na(data_combined$LotFrontage)] <- 0
+
+# MasVnrType : NA most likely means no veneer
+data_combined$MasVnrType[is.na(data_combined$MasVnrType)] = "None"
+data_combined$MasVnrArea[is.na(data_combined$MasVnrArea)] <- 0
+
+# MiscFeature : NA = "no misc feature"
+data_combined$MiscFeature = factor(data_combined$MiscFeature, levels=c(levels(data_combined$MiscFeature), "No"))
+data_combined$MiscFeature[is.na(data_combined$MiscFeature)] = "No"
+
+# PoolQC : data description says NA means "no pool"
+data_combined$PoolQC = factor(data_combined$PoolQC, levels=c(levels(data_combined$PoolQC), "No"))
+data_combined$PoolQC[is.na(data_combined$PoolQC)] = "No"
+
+# Electrical : One observation without a vlaue
+#--  find the most common class for this categorical variable and impute for this missing value.
+data_combined$Electrical[is.na(data_combined$Electrical)] = "SBrkr"
+
+# GarageYrBlt: It seems reasonable that most houses would build a garage when the house itself was built.
+idx <- which(is.na(data_combined$GarageYrBlt))
+data_combined[idx, 'GarageYrBlt'] <- data_combined[idx, 'YearBuilt']
+
+
+# Missing values correspond to the test data set. -- For one or two values missing, fill with the most common value
+data_combined$MSZoning[is.na(data_combined$MSZoning)] <- "RL"
+data_combined$Exterior1st[is.na(data_combined$Exterior1st)] <- "VinylSd"
+data_combined$Exterior2nd[is.na(data_combined$Exterior2nd)] <- "VinylSd"
+data_combined$KitchenQual[is.na(data_combined$KitchenQual)] <- "TA"
+data_combined$Functional[is.na(data_combined$Functional)] <- "Typ"
+data_combined$SaleType[is.na(data_combined$SaleType)] <- "WD"
+
+
+na.cols <- which(colSums(is.na(data_combined)) > 0)
+paste('There are now', length(na.cols), 'columns with missing values')
+
+
+```
+
+
+
+## Numerical features
+Some numerical features are actually really categories. We split the dataset into numeric and categorical.
+
+```{r Numercial features}
+
+num_features <- names(which(sapply(data_combined, is.numeric)))
+cat_features <- names(which(sapply(data_combined, is.factor)))
+
+df_numeric <- data_combined[num_features]
+```
+
+Function that maps a categoric value to its corresponding numeric value and returns that column to the data frame 
+```{r Helper funciton - Mapping a categoric value}
+
+map.fcn <- function(cols, map.list, df){
+  for (col in cols){
+    df[col] <- as.numeric(map.list[data_combined[,col]])
+  }
+  return(df)
+}
+```
+
+Adding custom numeric features
+
+```{r Mapping Numeric values to their coressponding categoric values}
+#Helper function to map numeric values to their coressponding categoric values
+df_group <- cbind(data_combined[1:1460,], SalePrice = raw_training_data$'SalePrice')
+
+group.prices <- function(col) {
+  group.table <- df_group[,c(col, 'SalePrice')] %>%
+    group_by_(col) %>%
+    summarise(mean.Price = mean(SalePrice), n = n()) %>%
+    arrange(mean.Price)
+
+  
+  print(qplot(x=reorder(group.table[[col]], -group.table[['mean.Price']]), y=group.table[['mean.Price']]) +
+    geom_bar(stat='identity', fill='cornflowerblue') +
+    theme_minimal() +
+    labs(x=col, y='Mean SalePrice') +
+    theme(axis.text.x = element_text(angle = 45)))
+  
+  return(data.frame(group.table))
+}
+
+```
+
+```{r Mapping Numeric values to their coressponding categoric values}
+
+#Columns with the  'Qual' or 'Cond' represent the quality or condition of that specific feature. Each of these columns have the  values: TA, Fa, Gd, None, Ex, Po.
+
+quality_cols <- c('ExterQual', 'ExterCond', 'GarageQual', 'GarageCond', 'FireplaceQu', 'KitchenQual', 'HeatingQC', 'BsmtQual')
+
+
+qual_list <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+
+df_numeric <- map.fcn(quality_cols, qual_list, df_numeric)
+
+
+#Basement Exposure
+bsmt.list <- c('None' = 0, 'No' = 1, 'Mn' = 2, 'Av' = 3, 'Gd' = 4)
+
+df_numeric = map.fcn(c('BsmtExposure'), bsmt.list, df_numeric)
+
+#BsmtFinType1: Quality of basement finished area
+#BsmtFinSF1: Type 1 finished square feet
+#Investigating the relationships between the basement quality and areas, we can see the true order of qualities of each basement to be 'None' < 'Unf' < 'LwQ' < 'BLQ' < 'Rec' < 'ALQ' < 'GLQ'.
+bsmt.fin.list <- c('None' = 0, 'Unf' = 1, 'LwQ' = 2,'Rec'= 3, 'BLQ' = 4, 'ALQ' = 5, 'GLQ' = 6)
+df_numeric <- map.fcn(c('BsmtFinType1','BsmtFinType2'), bsmt.fin.list, df_numeric)
+
+```
+
+```{r Home Functionality}
+#Home Functionaliry Rating
+#Assign numeric values accordingly accorindg to mean Saleprice
+
+group.prices('Functional')
+
+functional.list <- c('None' = 0, 'Sal' = 1, 'Sev' = 2, 'Maj2' = 3, 'Maj1' = 4, 'Mod' = 5, 'Min2' = 6, 'Min1' = 7, 'Typ'= 8)
+
+df_numeric['Functional'] <- as.numeric(functional.list[data_combined$Functional])
+```
+
+```{r Garage}
+
+#Garage
+group.prices('GarageFinish')
+
+garage.fin.list <- c('None' = 0,'Unf' = 1, 'RFn' = 2, 'Fin' = 3)
+
+df_numeric['GarageFinish'] <- as.numeric(garage.fin.list[data_combined$GarageFinish])
+```
+
+
+```{r Fence}
+
+#Fence
+group.prices('Fence')
+
+fence.list <- c('None' = 0, 'MnWw' = 1, 'GdWo' = 2, 'MnPrv' = 3, 'GdPrv' = 4)
+
+df_numeric['Fence'] <- as.numeric(fence.list[data_combined$Fence])
+
+```
+
+```{r MSSubCLass}
+#1946 & NEWER : 1
+#Other: 0
+MSdwelling.list <- c('20' = 1, '30'= 0, '40' = 0, '45' = 0,'50' = 0, '60' = 1, '70' = 0, '75' = 0, '80' = 0, '85' = 0, '90' = 0, '120' = 1, '150' = 0, '160' = 0, '180' = 0, '190' = 0)
+
+df_numeric['NewerDwelling'] <- as.numeric(MSdwelling.list[as.character(data_combined$MSSubClass)])
+
+```
+
+Helper function for plotting categoric data for easier data visualization
+```{r }
+plot.categoric <- function(cols, df){
+  for (col in cols) {
+    order.cols <- names(sort(table(data_combined[,col]), decreasing = TRUE))
+  
+    num.plot <- qplot(df[,col]) +
+      geom_bar(fill = 'cornflowerblue') +
+      geom_text(aes(label = ..count..), stat='count', vjust=-0.5) +
+      theme_minimal() +
+      scale_y_continuous(limits = c(0,max(table(df[,col]))*1.1)) +
+      scale_x_discrete(limits = order.cols) +
+      xlab(col) +
+      theme(axis.text.x = element_text(angle = 30, size=12))
+  
+    print(num.plot)
+  }
+}
+
+```
+
+Turning  categoric features into a binary columns
+
+```{r Lotshape}
+# binary column that returns 1 for houses with a regular lot shape and 0 for houses with any of the 3 irregular lot shapes
+plot.categoric('LotShape', data_combined)
+df_numeric['RegularLotShape'] <- (data_combined$LotShape == 'Reg') * 1
+```
+
+```{r Slope}
+# binary column that returns 1 for houses with Near Flat/Level, 0 for not flat
+plot.categoric('LandContour', data_combined)
+df_numeric['LandLeveled'] <- (data_combined$LandContour == 'Lvl') * 1
+df_numeric['LandSlopeGentle'] <- (data_combined$LandSlope == 'Gtl') * 1
+```
+
+Electrical: Electrical system
+```{r Binary}
+# binary column that returns 1 for houses with Standard Circuit Breakers & Romex, 0 for others
+plot.categoric('Electrical', data_combined)
+df_numeric['ElectricalSB'] <- (data_combined$Electrical == 'SBrkr') * 1
+
+```
+
+```{r Binary}
+# binary column that returns 1 if Gargae Deatached
+plot.categoric('GarageType', data_combined)
+df_numeric['GarageDetchd'] <- (data_combined$GarageType == 'Detchd') * 1
+
+
+```
+
+```{r Binary}
+# binary column that returns 1 if has paved drive, wooddeck, 2ndfloor or Masonry veneer>0, otherwise 0
+plot.categoric('PavedDrive', data_combined)
+df_numeric['HasPavedDrive'] <- (data_combined$PavedDrive == 'Y') * 1
+df_numeric['HasWoodDeck'] <- (data_combined$WoodDeckSF > 0) * 1
+df_numeric['Has2ndFlr'] <- (data_combined$X2ndFlrSF > 0) * 1
+df_numeric['HasMasVnr'] <- (data_combined$MasVnrArea > 0) * 1
+```
+
+```{r Binary}
+# binary column that returns 1 for houses with Standard Circuit Breakers & Romex, 0 for others
+plot.categoric('MiscFeature', data_combined)
+df_numeric['HasShed'] <- (data_combined$MiscFeature == 'Shed') * 1  
+
+```
+
+YearBuilt
+```{r Binary}
+# YearBuilt is different than the remodel year
+df_numeric['Remodeled'] <- (data_combined$YearBuilt != data_combined$YearRemodAdd) * 1
+
+# Houses that have been remodelled after the year they were sold
+df_numeric['RecentRemodel'] <- (data_combined$YearRemodAdd >= data_combined$YrSold) * 1
+
+# Houses that were sold the year they were built
+df_numeric['NewHouse'] <- (data_combined$YearBuilt == data_combined$YrSold) * 1
+```
+
+
+
+ We add a one encoded column for a house with a feature area greater than 0 since this means that the house does have a feature and 0 otherwise
+```{r Binary}
+##Binary
+cols.binary <- c('X2ndFlrSF', 'MasVnrArea', 'WoodDeckSF', 'OpenPorchSF', 'EnclosedPorch', 'X3SsnPorch', 'ScreenPorch')
+
+for (col in cols.binary){
+  df_numeric[str_c('Has',col)] <- (data_combined[,col] != 0) * 1
+}
+```
+
+Higher # of Sales in may, June, July - Add a variable for "High Season"
+```{r Time of the year}
+#Time of the year
+ggplot(data_combined, aes(x=MoSold)) +
+  geom_bar(fill = 'cornflowerblue') +
+  geom_text(aes(label=..count..), stat='count', vjust = -.5) +
+  theme_minimal() +
+  scale_x_continuous(breaks = 1:12)
+  
+df_numeric['HighSeason'] <- (data_combined$MoSold %in% c(5,6,7)) * 1
+
+#Age of Houses
+df_numeric['Age'] <- as.numeric(2010 - data_combined$YearBuilt)
+
+df_numeric['TimeSinceSold'] <- as.numeric(2010 - data_combined$YrSold)
+
+# how many years since the house was remodelled and sold 
+df_numeric['YearSinceRemodel'] <- as.numeric(data_combined$YrSold - data_combined$YearRemodAdd)
+
+
+```
+Analysis Neighborhoods
+```{r Neighborhoods}
+df_group[,c('Neighborhood','SalePrice')] %>%
+  group_by(Neighborhood) %>%
+  summarise(median.price = median(SalePrice, na.rm = TRUE)) %>%
+  arrange(median.price) %>%
+  mutate(nhbr.sorted = factor(Neighborhood, levels=Neighborhood)) %>%
+  ggplot(aes(x=nhbr.sorted, y=median.price)) +
+  geom_point() +
+  geom_text(aes(label = median.price, angle = 45), vjust = 2) +
+  theme_minimal() +
+  labs(x='Neighborhood', y='Median price') +
+  theme(text = element_text(size=12),
+        axis.text.x = element_text(angle=45))
+
+other.nbrh <- unique(data_combined$Neighborhood)[!unique(data_combined$Neighborhood) %in% c('StoneBr', 'NoRidge','NridgHt')]
+nbrh.rich <- c('Crawfor', 'Somerst, Timber', 'StoneBr', 'NoRidge', 'NridgeHt')
+df_numeric['NbrhRich'] <- (data_combined$Neighborhood %in% nbrh.rich) *1
+nbrh.map <- c('MeadowV' = 0, 'IDOTRR' = 0, 'Sawyer' = 1, 'BrDale' = 1, 'OldTown' = 1, 'Edwards' = 1, 
+              'BrkSide' = 1, 'Blueste' = 2, 'SWISU' = 2, 'NAmes' = 2, 'NPkVill' = 2, 'Mitchel' = 2,
+              'SawyerW' = 3, 'Gilbert' = 3, 'NWAmes' = 3, 'Blmngtn' = 3, 'CollgCr' = 3, 'ClearCr' = 3, 
+              'Crawfor' = 3, 'Veenker' = 4, 'Somerst' = 4, 'Timber' = 4, 'StoneBr' = 5, 'NoRidge' = 6, 
+              'NridgHt' = 6)
+
+df_numeric['NeighborhoodBin'] <- as.numeric(nbrh.map[data_combined$Neighborhood])
+
+```
+
+```{r Others}
+#Partial	Home was not completed when last assessed (associated with New Homes)
+df_numeric['PartialPlan'] <- (data_combined$SaleCondition == 'Partial') * 1
+
+group.prices('HeatingQC')
+
+heating.list <- c('Po' = 0, 'Fa' = 1, 'TA' = 2, 'Gd' = 2, 'Ex' = 4)
+
+df_numeric['HeatingScale'] <- as.numeric(heating.list[data_combined$HeatingQC])
+
+
+```
+
+Areas
+```{r Areas}
+
+#SUM areas
+area.cols <- c('LotFrontage', 'LotArea', 'MasVnrArea', 'BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF',
+               'TotalBsmtSF', 'X1stFlrSF', 'X2ndFlrSF', 'GrLivArea', 'GarageArea', 'WoodDeckSF', 
+               'OpenPorchSF', 'EnclosedPorch', 'X3SsnPorch', 'ScreenPorch', 'LowQualFinSF', 'PoolArea')
+
+df_numeric['TotalArea'] <- as.numeric(rowSums(data_combined[,area.cols]))
+
+
+df_numeric['AreaInside'] <- as.numeric(data_combined$X1stFlrSF + data_combined$X2ndFlrSF)
+
+```
+
+#Remove outliers - raw_training_data$GrLivArea > 4000 (Tired alos without | raw_training_data$LotFrontage > 199 | raw_training_data$LotArea > 100000, but worse results)
+```{r Outliers}
+
+
+idx.outliers <- which(raw_training_data$GrLivArea > 4000 )#| raw_training_data$LotFrontage > 199 | raw_training_data$LotArea > 100000)
+df_numeric <- df_numeric[!1:nrow(df_numeric) %in% idx.outliers,]
+data_combined <- data_combined[!1:nrow(data_combined) %in% idx.outliers,]
+raw_training_data <- raw_training_data[!1:nrow(raw_training_data) %in% idx.outliers,]
+```
+
+For the rest of the categoric features we can one-hot encode each value
+```{r dummy  }
+dummy <- dummyVars(" ~ .",data = data_combined[,cat_features])
+
+df.categoric <- data.frame(predict(dummy,newdata=data_combined[,cat_features]))
+
+
+#Binning YearBuilt - every 20 years create a new bin
+year.map = function(col.combined, col.name) {
+  for (i in 1:7) {
+    year.seq = seq(1871+(i-1)*20, 1871+i*20-1)
+    idx = which(data_combined[,col.combined] %in% year.seq)
+    df.categoric[idx,col.name] = i
+  }
+  return(df.categoric)
+}
+
+df.categoric['GarageYrBltBin'] = 0
+df.categoric <- year.map('GarageYrBlt', 'GarageYrBltBin')
+df.categoric['YearBuiltBin'] = 0
+df.categoric <- year.map('YearBuilt','YearBuiltBin')
+df.categoric['YearRemodAddBin'] = 0
+df.categoric <- year.map('YearRemodAdd', 'YearRemodAddBin')
+
+
+bin.cols <- c('GarageYrBltBin', 'YearBuiltBin', 'YearRemodAddBin')
+
+for (col in bin.cols) {
+  df.categoric <- cbind(df.categoric, model.matrix(~.-1, df.categoric[col]))
+}
+
+# lets drop the orginal 'GarageYrBltBin', 'YearBuiltBin', 'YearRemodAddBin' from our dataframe
+df.categoric <- df.categoric[,!names(df.categoric) %in% bin.cols]
+```
+
+
+The Features added may have become zero-variance predictors, such that a few samples may have an insignificant influence on the model. We can remove all of the near-zero-variance variables from out dataframe.
+```{r Areas}
+
+#Binding
+data <- cbind(df_numeric, df.categoric)
+
+#Near Zero variance
+
+nzv.data <- nearZeroVar(data, saveMetrics = TRUE)
+drop.cols <- rownames(nzv.data)[nzv.data$nzv == TRUE]
+
+data <- data[,!names(data) %in% drop.cols]
+dim(data)
+```
+
+## Skewness
+
+```{r Skewness}
+column_types <- sapply(names(data),function(x){class(data[[x]])})
+numeric_columns <-names(column_types[column_types != "factor"])
+
+# skew of each variable
+skew <- sapply(numeric_columns,function(x){skewness(data[[x]],na.rm = T)})
+
+# transform all variables above a threshold skewness.
+skew <- skew[skew > 0.75]
+for(x in names(skew)) {
+  data[[x]] <- log(data[[x]] + 1)
+}
+
+```
+
+Splitting dataset into training and testing 
+```{r Data Preparation}
+
+training_data <- data[1:1456,]#cbind(data[1:1451,], raw_training_data['SalePrice'])
+
+
+test_data <- data[1457:nrow(data),]
+```
+
+Prediction 
+```{r Prediction}
+
+log_y <- log(raw_training_data$SalePrice)
+
+X_train <- as.matrix(training_data)
+X_test <- as.matrix(test_data)
+
+set.seed(1)
+cv <- cv.glmnet(X_train, log_y)
+
+predict_X <- predict(cv, newx = X_train, s = "lambda.min")
+sqrt(cv$cvm[cv$lambda == cv$lambda.min])
+predict_test <- predict(cv, newx = X_test, s = "lambda.min")
+predict_df <- data.frame(Id = row.names(predict_test), SalePrice = exp(predict_test[,1]))
+
+write.csv(predict_df, "Prediction_final_OV.csv", row.names = FALSE)
+```
